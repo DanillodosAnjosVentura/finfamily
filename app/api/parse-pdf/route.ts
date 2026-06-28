@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
 
     const message = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4096,
+      max_tokens: 8096,
       messages: [
         {
           role: 'user',
@@ -69,7 +69,21 @@ Retorne APENAS um JSON válido no formato:
     const jsonMatch = content.text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) throw new Error('Não foi possível extrair transações do PDF')
 
-    const result = JSON.parse(jsonMatch[0])
+    // Tentar reparar JSON truncado fechando arrays/objetos abertos
+    let jsonStr = jsonMatch[0]
+    let result
+    try {
+      result = JSON.parse(jsonStr)
+    } catch {
+      // Tentar fechar JSON incompleto
+      const openBrackets = (jsonStr.match(/\[/g) || []).length - (jsonStr.match(/\]/g) || []).length
+      const openBraces = (jsonStr.match(/\{/g) || []).length - (jsonStr.match(/\}/g) || []).length
+      // Remover vírgula/linha incompleta do final
+      jsonStr = jsonStr.replace(/,\s*$/, '').replace(/,\s*\{[^}]*$/, '')
+      for (let i = 0; i < openBrackets; i++) jsonStr += ']'
+      for (let i = 0; i < openBraces; i++) jsonStr += '}'
+      result = JSON.parse(jsonStr)
+    }
     return NextResponse.json(result)
 
   } catch (err) {
