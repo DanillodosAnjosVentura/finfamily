@@ -34,8 +34,8 @@ function filterTransactionLines(text: string): string {
     const hasMerchant = line.trim().length > 5
     return (hasDate || hasValue) && hasMerchant
   })
-  // Retorna no máximo 400 linhas relevantes (~8000 tokens)
-  return relevant.slice(0, 400).join('\n')
+  // Retorna no máximo 150 linhas relevantes para caber na resposta
+  return relevant.slice(0, 150).join('\n')
 }
 
 export async function POST(req: NextRequest) {
@@ -99,12 +99,14 @@ ${textToSend}`,
     try {
       result = JSON.parse(jsonStr)
     } catch {
-      // Tentar reparar JSON truncado
-      jsonStr = jsonStr.replace(/,\s*$/, '').replace(/,\s*\{[^}]*$/, '')
-      const ob = (jsonStr.match(/\[/g) || []).length - (jsonStr.match(/\]/g) || []).length
-      const oc = (jsonStr.match(/\{/g) || []).length - (jsonStr.match(/\}/g) || []).length
-      for (let i = 0; i < ob; i++) jsonStr += ']'
-      for (let i = 0; i < oc; i++) jsonStr += '}'
+      // Encontrar último item completo e fechar o JSON a partir daí
+      const lastComplete = jsonStr.lastIndexOf('},')
+      if (lastComplete > 0) {
+        jsonStr = jsonStr.substring(0, lastComplete + 1) + ']}'
+      } else {
+        // Fallback: fechar o array/objeto mais simples possível
+        jsonStr = jsonStr.replace(/,?\s*\{[^}]*$/, '') + ']}'
+      }
       result = JSON.parse(jsonStr)
     }
 
