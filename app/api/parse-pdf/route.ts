@@ -1,0 +1,82 @@
+import { NextRequest, NextResponse } from 'next/server'
+import Anthropic from '@anthropic-ai/sdk'
+
+export const runtime = 'nodejs'
+
+export async function POST(req: NextRequest) {
+  try {
+    const formData = await req.formData()
+    const file = formData.get('file') as File | null
+    if (!file) return NextResponse.json({ error: 'Arquivo não enviado' }, { status: 400 })
+
+    const apiKey = process.env.ANTHROPIC_API_KEY
+    if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY não configurada' }, { status: 500 })
+
+    const arrayBuffer = await file.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+
+    // Extrair texto do PDF com pdf-parse
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse = require('pdf-parse')
+    const data = await pdfParse(buffer)
+    const text = data.text
+
+    if (!text || text.trim().length < 50) {
+      return NextResponse.json({ error: 'Não foi possível extrair texto do PDF. Tente um PDF com texto selecionável.' }, { status: 400 })
+    }
+
+    const client = new Anthropic({ apiKey })
+
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      messages: [
+        {
+          role: 'user',
+          content: `Você é um assistente especializado em extrair lançamentos de faturas de cartão de crédito brasileiras.
+
+Analise o texto abaixo de uma fatura de cartão de crédito e extraia TODOS os lançamentos/transações.
+
+Para cada transação, extraia:
+- data: formato YYYY-MM-DD (se o ano não estiver explícito, use ${new Date().getFullYear()})
+- descricao: descrição do estabelecimento/lançamento (limpa e legível)
+- valor: valor em número decimal (positivo para compras/débitos, negativo para créditos/estornos)
+- categoria_sugerida: uma das categorias: Alimentação, Transporte, Lazer, Saúde, Mercado, Farmácia, Vestuário, Educação, Ferramentas de Trabalho, Telefonia, Internet, Outros
+
+Retorne APENAS um JSON válido no formato:
+{
+  "transacoes": [
+    {
+      "data": "YYYY-MM-DD",
+      "descricao": "Nome do estabelecimento",
+      "valor": 99.90,
+      "categoria_sugerida": "Alimentação"
+    }
+  ],
+  "total_fatura": 0.00,
+  "vencimento": "YYYY-MM-DD"
+}
+
+Texto da fatura:
+${text.substring(0, 12000)}`
+        }
+      ]
+    })
+
+    const content = message.content[0]
+    if (content.type !== 'text') throw new Error('Resposta inválida da IA')
+
+    const jsonMatch = content.text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error('JSON não encontrado na resposta')
+
+    const result = JSON.parse(jsonMatch[0])
+    return NextResponse.json(result)
+
+  } catch (err) {
+    console.error('Erro ao processar PDF:', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Erro desconhecido' },
+      { status: 500 }
+    )
+  }
+}
