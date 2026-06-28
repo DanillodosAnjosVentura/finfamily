@@ -51,7 +51,7 @@ export function DashboardClient({ transactions, historicalTransactions }: Props)
   historicalTransactions.forEach(t => {
     const monthKey = t.date.substring(0, 7)
     if (!monthlyData[monthKey]) {
-      const label = format(parseISO(t.date + '-01'), 'MMM/yy', { locale: ptBR })
+        const label = format(parseISO(monthKey + '-01'), 'MMM/yy', { locale: ptBR })
       monthlyData[monthKey] = { month: label, receitas: 0, despesas: 0 }
     }
     if (t.type === 'income') monthlyData[monthKey].receitas += Number(t.amount)
@@ -180,7 +180,7 @@ export function DashboardClient({ transactions, historicalTransactions }: Props)
                     <span className="text-xl">{t.category?.icon ?? '💳'}</span>
                     <div>
                       <p className="text-sm font-medium text-gray-800">{t.description || t.category?.name || 'Sem descrição'}</p>
-                      <p className="text-xs text-gray-400">{format(parseISO(t.date), 'dd/MM/yyyy')} · {t.category?.name}</p>
+                      <p className="text-xs text-gray-400">{t.date ? format(parseISO(t.date), 'dd/MM/yyyy') : ''} · {t.category?.name}</p>
                     </div>
                   </div>
                   <span className={`font-semibold text-sm ${t.type === 'income' ? 'text-green-600' : 'text-red-500'}`}>
