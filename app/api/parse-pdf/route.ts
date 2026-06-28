@@ -10,20 +10,10 @@ export async function POST(req: NextRequest) {
     if (!file) return NextResponse.json({ error: 'Arquivo não enviado' }, { status: 400 })
 
     const apiKey = process.env.ANTHROPIC_API_KEY
-    if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY não configurada' }, { status: 500 })
+    if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY não configurada no servidor' }, { status: 500 })
 
     const arrayBuffer = await file.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
-
-    // Extrair texto do PDF com pdf-parse
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require('pdf-parse')
-    const data = await pdfParse(buffer)
-    const text = data.text
-
-    if (!text || text.trim().length < 50) {
-      return NextResponse.json({ error: 'Não foi possível extrair texto do PDF. Tente um PDF com texto selecionável.' }, { status: 400 })
-    }
+    const base64 = Buffer.from(arrayBuffer).toString('base64')
 
     const client = new Anthropic({ apiKey })
 
@@ -33,15 +23,26 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: 'user',
-          content: `Você é um assistente especializado em extrair lançamentos de faturas de cartão de crédito brasileiras.
+          content: [
+            {
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: 'application/pdf',
+                data: base64,
+              },
+            },
+            {
+              type: 'text',
+              text: `Você é um assistente especializado em extrair lançamentos de faturas de cartão de crédito brasileiras.
 
-Analise o texto abaixo de uma fatura de cartão de crédito e extraia TODOS os lançamentos/transações.
+Analise esta fatura de cartão de crédito e extraia TODOS os lançamentos/transações.
 
 Para cada transação, extraia:
 - data: formato YYYY-MM-DD (se o ano não estiver explícito, use ${new Date().getFullYear()})
 - descricao: descrição do estabelecimento/lançamento (limpa e legível)
-- valor: valor em número decimal (positivo para compras/débitos, negativo para créditos/estornos)
-- categoria_sugerida: uma das categorias: Alimentação, Transporte, Lazer, Saúde, Mercado, Farmácia, Vestuário, Educação, Ferramentas de Trabalho, Telefonia, Internet, Outros
+- valor: valor em número decimal positivo para compras/débitos, negativo para créditos/estornos
+- categoria_sugerida: uma das categorias: Alimentação, Transporte, Lazer, Saúde, Mercado, Educação, Ferramentas de Trabalho, Telefonia, Internet, Outros
 
 Retorne APENAS um JSON válido no formato:
 {
@@ -55,19 +56,18 @@ Retorne APENAS um JSON válido no formato:
   ],
   "total_fatura": 0.00,
   "vencimento": "YYYY-MM-DD"
-}
-
-Texto da fatura:
-${text.substring(0, 12000)}`
-        }
-      ]
+}`,
+            },
+          ],
+        },
+      ],
     })
 
     const content = message.content[0]
     if (content.type !== 'text') throw new Error('Resposta inválida da IA')
 
     const jsonMatch = content.text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error('JSON não encontrado na resposta')
+    if (!jsonMatch) throw new Error('Não foi possível extrair transações do PDF')
 
     const result = JSON.parse(jsonMatch[0])
     return NextResponse.json(result)
