@@ -1,0 +1,18 @@
+export const DEFAULT_CATEGORIES = [
+  { name: 'Salário', type: 'income' as const, icon: '💰', color: '#22c55e' },
+  { name: 'Renda Extra', type: 'income' as const, icon: '💵', color: '#16a34a' },
+  { name: 'Investimentos', type: 'income' as const, icon: '📈', color: '#15803d' },
+  { name: 'Alimentação', type: 'expense' as const, icon: '🍔', color: '#f97316' },
+  { name: 'Mercado', type: 'expense' as const, icon: '🛒', color: '#fb923c' },
+  { name: 'Transporte', type: 'expense' as const, icon: '🚗', color: '#3b82f6' },
+  { name: 'Aluguel', type: 'expense' as const, icon: '🏠', color: '#8b5cf6' },
+  { name: 'Financiamento Veicular', type: 'expense' as const, icon: '🚙', color: '#7c3aed' },
+  { name: 'IPVA', type: 'expense' as const, icon: '📋', color: '#6d28d9' },
+  { name: 'Internet', type: 'expense' as const, icon: '📶', color: '#06b6d4' },
+  { name: 'Telefonia', type: 'expense' as const, icon: '📱', color: '#0891b2' },
+  { name: 'Consórcio', type: 'expense' as const, icon: '🤝', color: '#0e7490' },
+  { name: 'Lazer', type: 'expense' as const, icon: '🎉', color: '#ec4899' },
+  { name: 'Saúde', type: 'expense' as const, icon: '💊', color: '#ef4444' },
+  { name: 'Educação', type: 'expense' as const, icon: '📚', color: '#f59e0b' },
+  { name: 'Ferramentas de Trabalho', type: 'expense' as const, icon: '🛠️', color: '#64748b' },
+]
