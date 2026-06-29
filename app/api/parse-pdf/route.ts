@@ -14,6 +14,67 @@ function parseBRValue(val: string): number {
   return parseFloat(val.replace(/\./g, '').replace(',', '.'))
 }
 
+// Parser PicPay: "DD/MM  ESTABELECIMENTO  VALOR" (gratuito, sem IA)
+function parsePicPay(text: string): { transacoes: object[]; total_fatura: number } | null {
+  if (!/picpay/i.test(text)) return null
+
+  // Detectar ano da fatura (ex: "Vencimento:\n \n10-06-2026" ou "02-06-2026")
+  const yearMatch = text.match(/(\d{4})/)
+  const year = yearMatch ? yearMatch[1] : String(new Date().getFullYear())
+
+  const transacoes: object[] = []
+
+  // Formato: "08/04\n \nSHEIN *57.507\n \n81,51" ou linha compacta "08/04  SHEIN  81,51"
+  // Vamos extrair blocos de transação
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+
+  let i = 0
+  while (i < lines.length) {
+    // Detectar linha de data DD/MM
+    const dateMatch = lines[i].match(/^(\d{2})\/(\d{2})$/)
+    if (dateMatch) {
+      const dia = dateMatch[1]
+      const mes = dateMatch[2]
+      // Próxima linha não vazia = descrição (pular linhas de espaço)
+      let desc = ''
+      let valor = 0
+      let j = i + 1
+      // Coletar descrição (pode ter mais de 1 linha antes do valor)
+      while (j < lines.length && j < i + 5) {
+        const v = lines[j].match(/^([\d\.]+,\d{2})$/)
+        if (v) { valor = parseBRValue(v[1]); j++; break }
+        if (lines[j] && !/^\s*$/.test(lines[j])) {
+          desc += (desc ? ' ' : '') + lines[j]
+        }
+        j++
+      }
+      if (desc && valor > 0 && !/total|pagamento|saldo|limite|crédito|encargo/i.test(desc)) {
+        // Determinar ano correto (se mês > mês atual, provavelmente ano anterior)
+        const mesNum = parseInt(mes)
+        const anoNum = parseInt(year)
+        const mesAtual = new Date().getMonth() + 1
+        const ano = mesNum > mesAtual + 1 ? String(anoNum - 1) : year
+        transacoes.push({
+          data: `${ano}-${mes}-${dia}`,
+          descricao: desc,
+          valor,
+          categoria_sugerida: guessCategory(desc),
+        })
+      }
+      i = j
+      continue
+    }
+    i++
+  }
+
+  if (transacoes.length === 0) return null
+
+  const totalMatch = text.match(/Total da(?:\s+sua)?\s+fatura\s*\n?\s*R\$\s*([\d\.]+,\d{2})/i)
+  const total_fatura = totalMatch ? parseBRValue(totalMatch[1]) : 0
+
+  return { transacoes, total_fatura }
+}
+
 // Parser regex para Nubank (gratuito, sem IA)
 function parseNubank(text: string): { transacoes: object[]; total_fatura: number } | null {
   // Detectar se é Nubank
@@ -66,11 +127,13 @@ function guessCategory(desc: string): string {
 }
 
 async function extractText(buffer: Buffer): Promise<string> {
-  const pdfjs = await import('pdfjs-dist')
-  const loadingTask = pdfjs.getDocument({
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const workerUrl = new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).href
+  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const loadingTask = (pdfjs as any).getDocument({
     data: new Uint8Array(buffer),
     useWorkerFetch: false,
-    isEvalSupported: false,
     useSystemFonts: true,
   })
   const pdf = await loadingTask.promise
@@ -79,7 +142,7 @@ async function extractText(buffer: Buffer): Promise<string> {
     const page = await pdf.getPage(i)
     const content = await page.getTextContent()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    texts.push(content.items.map((x: any) => x.str).join(' '))
+    texts.push(content.items.map((x: any) => x.str).join('\n'))
   }
   return texts.join('\n')
 }
@@ -100,12 +163,13 @@ export async function POST(req: NextRequest) {
       console.error('pdfjs error:', e)
     }
 
-    // 2. Tentar parser Nubank (gratuito, sem IA)
+    // 2. Tentar parsers específicos por banco (gratuito, sem IA)
     if (text) {
+      const picpay = parsePicPay(text)
+      if (picpay && picpay.transacoes.length > 0) return NextResponse.json(picpay)
+
       const nubank = parseNubank(text)
-      if (nubank && nubank.transacoes.length > 0) {
-        return NextResponse.json(nubank)
-      }
+      if (nubank && nubank.transacoes.length > 0) return NextResponse.json(nubank)
     }
 
     // 3. Fallback: Claude com texto limitado (custo mínimo)
