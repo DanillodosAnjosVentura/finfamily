@@ -127,24 +127,20 @@ function guessCategory(desc: string): string {
 }
 
 async function extractText(buffer: Buffer): Promise<string> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const workerUrl = new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).href
-  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const loadingTask = (pdfjs as any).getDocument({
-    data: new Uint8Array(buffer),
-    useWorkerFetch: false,
-    useSystemFonts: true,
-  })
-  const pdf = await loadingTask.promise
-  const texts: string[] = []
-  for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
-    const page = await pdf.getPage(i)
-    const content = await page.getTextContent()
+  // Polyfill DOMMatrix para ambiente Node.js (necessário para pdf-parse)
+  if (typeof (globalThis as Record<string, unknown>).DOMMatrix === 'undefined') {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    texts.push(content.items.map((x: any) => x.str).join('\n'))
+    ;(globalThis as any).DOMMatrix = class DOMMatrix {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      constructor(..._args: any[]) {}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      static fromMatrix() { return new (globalThis as any).DOMMatrix() }
+    }
   }
-  return texts.join('\n')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require('pdf-parse')
+  const data = await pdfParse(buffer)
+  return data.text || ''
 }
 
 export async function POST(req: NextRequest) {
