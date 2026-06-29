@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Transaction, Category } from '@/types'
+import { Transaction, Category, CreditCard, getBillingPeriod, effectivePeriod } from '@/types'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
@@ -16,11 +16,12 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Pencil } from 'lucide-react'
+import { Plus, Trash2, Pencil, CreditCard as CardIcon } from 'lucide-react'
 
 interface Props {
   initialTransactions: Transaction[]
   categories: Category[]
+  creditCards: CreditCard[]
   userId: string
 }
 
@@ -32,31 +33,35 @@ const EMPTY_FORM = {
   date: new Date().toISOString().split('T')[0],
   recurring: false,
   recurring_period: '' as '' | 'monthly' | 'yearly',
+  credit_card_id: '',
 }
 
-export function TransactionsClient({ initialTransactions, categories, userId }: Props) {
+export function TransactionsClient({ initialTransactions, categories, creditCards, userId }: Props) {
   const [transactions, setTransactions] = useState(initialTransactions)
   const [open, setOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY_FORM)
-  const [filter, setFilter] = useState({ type: 'all', month: '' })
+  const [filterType, setFilterType] = useState('all')
+  const [filterMonth, setFilterMonth] = useState('')
   const [loading, setLoading] = useState(false)
   const supabase = createClient()
   const router = useRouter()
 
   const filteredCategories = categories.filter(c => c.type === form.type)
 
+  // Calcular billing_period com base no cartão selecionado
+  const selectedCard = creditCards.find(c => c.id === form.credit_card_id)
+  const computedBillingPeriod = selectedCard && form.date
+    ? getBillingPeriod(form.date, selectedCard.closing_day)
+    : null
+
   const filteredTransactions = transactions.filter(t => {
-    if (filter.type !== 'all' && t.type !== filter.type) return false
-    if (filter.month && !t.date.startsWith(filter.month)) return false
+    if (filterType !== 'all' && t.type !== filterType) return false
+    if (filterMonth && effectivePeriod(t) !== filterMonth) return false
     return true
   })
 
-  function openNew() {
-    setForm(EMPTY_FORM)
-    setEditingId(null)
-    setOpen(true)
-  }
+  function openNew() { setForm(EMPTY_FORM); setEditingId(null); setOpen(true) }
 
   function openEdit(t: Transaction) {
     setForm({
@@ -67,6 +72,7 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
       date: t.date,
       recurring: t.recurring,
       recurring_period: t.recurring_period || '',
+      credit_card_id: t.credit_card_id || '',
     })
     setEditingId(t.id)
     setOpen(true)
@@ -78,6 +84,10 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
       return
     }
     setLoading(true)
+
+    const card = creditCards.find(c => c.id === form.credit_card_id)
+    const billing_period = card ? getBillingPeriod(form.date, card.closing_day) : null
+
     const payload = {
       user_id: userId,
       amount: parseFloat(form.amount),
@@ -87,6 +97,8 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
       date: form.date,
       recurring: form.recurring,
       recurring_period: form.recurring_period || null,
+      credit_card_id: form.credit_card_id || null,
+      billing_period,
     }
 
     try {
@@ -95,7 +107,7 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
           .from('transactions')
           .update(payload)
           .eq('id', editingId)
-          .select('*, category:categories(*)')
+          .select('*, category:categories(*), credit_card:credit_cards(*)')
           .single()
         if (error) throw error
         setTransactions(prev => prev.map(t => t.id === editingId ? data : t))
@@ -104,7 +116,7 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
         const { data, error } = await supabase
           .from('transactions')
           .insert(payload)
-          .select('*, category:categories(*)')
+          .select('*, category:categories(*), credit_card:credit_cards(*)')
           .single()
         if (error) throw error
         setTransactions(prev => [data, ...prev])
@@ -112,11 +124,8 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
       }
       setOpen(false)
       router.refresh()
-    } catch {
-      toast.error('Erro ao salvar transação')
-    } finally {
-      setLoading(false)
-    }
+    } catch { toast.error('Erro ao salvar transação') }
+    finally { setLoading(false) }
   }
 
   async function handleDelete(id: string) {
@@ -131,118 +140,126 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
   const totalExpense = filteredTransactions.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-4 md:p-6 space-y-5 pb-24 md:pb-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Transações</h1>
           <p className="text-sm text-gray-500">Receitas e despesas</p>
         </div>
         <Button onClick={openNew} className="bg-green-600 hover:bg-green-700 gap-2">
-          <Plus className="w-4 h-4" /> Nova Transação
+          <Plus className="w-4 h-4" /> Nova
         </Button>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>{editingId ? 'Editar' : 'Nova'} Transação</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 pt-2">
-              <div className="grid grid-cols-2 gap-3">
-                <Button
-                  variant={form.type === 'expense' ? 'default' : 'outline'}
-                  className={form.type === 'expense' ? 'bg-red-500 hover:bg-red-600' : ''}
-                  onClick={() => setForm(f => ({ ...f, type: 'expense', category_id: '' }))}
-                >Despesa</Button>
-                <Button
-                  variant={form.type === 'income' ? 'default' : 'outline'}
-                  className={form.type === 'income' ? 'bg-green-600 hover:bg-green-700' : ''}
-                  onClick={() => setForm(f => ({ ...f, type: 'income', category_id: '' }))}
-                >Receita</Button>
-              </div>
+      </div>
 
-              <div className="space-y-1">
-                <Label>Valor (R$) *</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.amount}
-                  onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
-                />
-              </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingId ? 'Editar' : 'Nova'} Transação</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <Button variant={form.type === 'expense' ? 'default' : 'outline'}
+                className={form.type === 'expense' ? 'bg-red-500 hover:bg-red-600' : ''}
+                onClick={() => setForm(f => ({ ...f, type: 'expense', category_id: '', credit_card_id: '' }))}>
+                Despesa
+              </Button>
+              <Button variant={form.type === 'income' ? 'default' : 'outline'}
+                className={form.type === 'income' ? 'bg-green-600 hover:bg-green-700' : ''}
+                onClick={() => setForm(f => ({ ...f, type: 'income', category_id: '', credit_card_id: '' }))}>
+                Receita
+              </Button>
+            </div>
 
+            <div className="space-y-1">
+              <Label>Valor (R$) *</Label>
+              <Input type="number" step="0.01" min="0" placeholder="0,00"
+                value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+            </div>
+
+            <div className="space-y-1">
+              <Label>Categoria *</Label>
+              <Select value={form.category_id} onValueChange={v => setForm(f => ({ ...f, category_id: v ?? '' }))}>
+                <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                <SelectContent>
+                  {filteredCategories.map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.icon} {c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label>Descrição</Label>
+              <Input placeholder="Ex: Almoço, salário..."
+                value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+            </div>
+
+            <div className="space-y-1">
+              <Label>Data da compra *</Label>
+              <Input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+            </div>
+
+            {form.type === 'expense' && (
               <div className="space-y-1">
-                <Label>Categoria *</Label>
-                <Select value={form.category_id} onValueChange={(v) => setForm(f => ({ ...f, category_id: v ?? '' }))}>
-                  <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                <Label>Cartão de crédito</Label>
+                <Select value={form.credit_card_id} onValueChange={v => setForm(f => ({ ...f, credit_card_id: v === 'none' ? '' : (v ?? '') }))}>
+                  <SelectTrigger><SelectValue placeholder="Despesa direta (sem cartão)" /></SelectTrigger>
                   <SelectContent>
-                    {filteredCategories.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.icon} {c.name}</SelectItem>
+                    <SelectItem value="none">— Despesa direta (aluguel, IPVA...)</SelectItem>
+                    {creditCards.map(c => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: c.color }} />
+                          {c.name} (fecha dia {c.closing_day})
+                        </span>
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {computedBillingPeriod && (
+                  <p className="text-xs text-indigo-600 mt-1">
+                    📅 Competência: <strong>{computedBillingPeriod}</strong> — esta compra entra na fatura de {new Date(computedBillingPeriod + '-15').toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}
+                  </p>
+                )}
               </div>
+            )}
 
-              <div className="space-y-1">
-                <Label>Descrição</Label>
-                <Input
-                  placeholder="Ex: Almoço, salário..."
-                  value={form.description}
-                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label>Data *</Label>
-                <Input
-                  type="date"
-                  value={form.date}
-                  onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="recurring"
-                  checked={form.recurring}
-                  onChange={e => setForm(f => ({ ...f, recurring: e.target.checked }))}
-                  className="w-4 h-4"
-                />
-                <Label htmlFor="recurring">Lançamento recorrente</Label>
-              </div>
-
-              {form.recurring && (
-                <div className="space-y-1">
-                  <Label>Periodicidade</Label>
-                  <Select value={form.recurring_period} onValueChange={(v) => setForm(f => ({ ...f, recurring_period: (v ?? '') as '' | 'monthly' | 'yearly' }))}>
-                    <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="monthly">Mensal</SelectItem>
-                      <SelectItem value="yearly">Anual</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              <Button onClick={handleSave} disabled={loading} className="w-full bg-green-600 hover:bg-green-700">
-                {loading ? 'Salvando...' : 'Salvar'}
-              </Button>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" id="recurring" checked={form.recurring}
+                onChange={e => setForm(f => ({ ...f, recurring: e.target.checked }))} className="w-4 h-4" />
+              <Label htmlFor="recurring">Lançamento recorrente</Label>
             </div>
-          </DialogContent>
-        </Dialog>
-      </div>
+
+            {form.recurring && (
+              <div className="space-y-1">
+                <Label>Periodicidade</Label>
+                <Select value={form.recurring_period} onValueChange={v => setForm(f => ({ ...f, recurring_period: (v ?? '') as '' | 'monthly' | 'yearly' }))}>
+                  <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Mensal</SelectItem>
+                    <SelectItem value="yearly">Anual</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <Button onClick={handleSave} disabled={loading} className="w-full bg-green-600 hover:bg-green-700">
+              {loading ? 'Salvando...' : 'Salvar'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Resumo */}
-      <div className="grid grid-cols-3 gap-4">
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Receitas</p><p className="font-bold text-green-600">{formatCurrency(totalIncome)}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Despesas</p><p className="font-bold text-red-500">{formatCurrency(totalExpense)}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Saldo</p><p className={`font-bold ${totalIncome - totalExpense >= 0 ? 'text-blue-600' : 'text-red-500'}`}>{formatCurrency(totalIncome - totalExpense)}</p></CardContent></Card>
+      <div className="grid grid-cols-3 gap-3">
+        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Receitas</p><p className="font-bold text-green-600 text-sm">{formatCurrency(totalIncome)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Despesas</p><p className="font-bold text-red-500 text-sm">{formatCurrency(totalExpense)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Saldo</p><p className={`font-bold text-sm ${totalIncome - totalExpense >= 0 ? 'text-blue-600' : 'text-red-500'}`}>{formatCurrency(totalIncome - totalExpense)}</p></CardContent></Card>
       </div>
 
       {/* Filtros */}
       <div className="flex gap-3 flex-wrap">
-        <Select value={filter.type} onValueChange={(v) => setFilter(f => ({ ...f, type: v ?? 'all' }))}>
+        <Select value={filterType} onValueChange={v => setFilterType(v ?? 'all')}>
           <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos</SelectItem>
@@ -250,14 +267,10 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
             <SelectItem value="expense">Despesas</SelectItem>
           </SelectContent>
         </Select>
-        <Input
-          type="month"
-          className="w-44"
-          value={filter.month}
-          onChange={e => setFilter(f => ({ ...f, month: e.target.value }))}
-        />
-        {(filter.type !== 'all' || filter.month) && (
-          <Button variant="outline" onClick={() => setFilter({ type: 'all', month: '' })}>Limpar</Button>
+        <Input type="month" className="w-44" value={filterMonth}
+          onChange={e => setFilterMonth(e.target.value)} />
+        {(filterType !== 'all' || filterMonth) && (
+          <Button variant="outline" onClick={() => { setFilterType('all'); setFilterMonth('') }}>Limpar</Button>
         )}
       </div>
 
@@ -270,20 +283,26 @@ export function TransactionsClient({ initialTransactions, categories, userId }: 
           ) : (
             <div className="divide-y divide-gray-100">
               {filteredTransactions.map(t => (
-                <div key={t.id} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl">{t.category?.icon ?? '💳'}</span>
-                    <div>
-                      <p className="text-sm font-medium text-gray-800">
+                <div key={t.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xl flex-shrink-0">{t.category?.icon ?? '💳'}</span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">
                         {t.description || t.category?.name || 'Sem descrição'}
                         {t.recurring && <Badge variant="outline" className="ml-2 text-xs py-0">{t.recurring_period === 'monthly' ? 'mensal' : 'anual'}</Badge>}
                       </p>
-                      <p className="text-xs text-gray-400">
-                        {format(parseISO(t.date), 'dd/MM/yyyy', { locale: ptBR })} · {t.category?.name}
+                      <p className="text-xs text-gray-400 flex items-center gap-1 flex-wrap">
+                        <span>{format(parseISO(t.date), 'dd/MM/yy', { locale: ptBR })}</span>
+                        {t.billing_period && t.billing_period !== t.date.substring(0, 7) && (
+                          <span className="text-indigo-500 flex items-center gap-0.5">
+                            <CardIcon className="w-3 h-3" /> fatura {t.billing_period}
+                          </span>
+                        )}
+                        <span>· {t.category?.name}</span>
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <span className={`font-semibold text-sm ${t.type === 'income' ? 'text-green-600' : 'text-red-500'}`}>
                       {t.type === 'income' ? '+' : '-'}{formatCurrency(Number(t.amount))}
                     </span>

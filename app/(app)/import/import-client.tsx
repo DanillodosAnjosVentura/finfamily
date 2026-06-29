@@ -2,12 +2,14 @@
 
 import { useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Category } from '@/types'
+import { Category, CreditCard, getBillingPeriod } from '@/types'
 import { formatCurrency } from '@/lib/format'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Upload, FileText, CheckCircle, Loader2, Trash2 } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
+import { Upload, FileText, CheckCircle, Loader2, Trash2, CreditCard as CardIcon } from 'lucide-react'
 
 interface ParsedTransaction {
   data: string
@@ -26,6 +28,7 @@ interface ParseResult {
 
 interface Props {
   categories: Category[]
+  creditCards: CreditCard[]
   userId: string
 }
 
@@ -43,12 +46,15 @@ const CATEGORY_MAP: Record<string, string> = {
   'Internet': 'Internet',
 }
 
-export function ImportClient({ categories, userId }: Props) {
+export function ImportClient({ categories, creditCards, userId }: Props) {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ParseResult | null>(null)
   const [transactions, setTransactions] = useState<ParsedTransaction[]>([])
   const [saving, setSaving] = useState(false)
+  const [selectedCardId, setSelectedCardId] = useState<string>('')
+
+  const selectedCard = creditCards.find(c => c.id === selectedCardId)
 
   function matchCategory(sugestao: string): string {
     const mapped = CATEGORY_MAP[sugestao] || sugestao
@@ -110,6 +116,8 @@ export function ImportClient({ categories, userId }: Props) {
         description: t.descricao,
         date: t.data,
         recurring: false,
+        credit_card_id: selectedCard?.id || null,
+        billing_period: selectedCard ? getBillingPeriod(t.data, selectedCard.closing_day) : null,
       }))
       const { error } = await supabase.from('transactions').insert(rows)
       if (error) throw error
@@ -131,6 +139,44 @@ export function ImportClient({ categories, userId }: Props) {
         <h1 className="text-2xl font-bold text-gray-900">Importar Fatura PDF</h1>
         <p className="text-sm text-gray-500 mt-1">Envie o PDF da sua fatura de cartão de crédito para importar os lançamentos automaticamente</p>
       </div>
+
+      {/* Seleção de cartão */}
+      <Card>
+        <CardContent className="pt-4">
+          <div className="space-y-1">
+            <Label className="flex items-center gap-2">
+              <CardIcon className="w-4 h-4 text-indigo-500" />
+              Cartão desta fatura
+            </Label>
+            <Select value={selectedCardId} onValueChange={v => setSelectedCardId(v === 'none' ? '' : (v ?? ''))}>
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione o cartão para calcular competência..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— Sem cartão (não calcular competência)</SelectItem>
+                {creditCards.map(c => (
+                  <SelectItem key={c.id} value={c.id}>
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: c.color }} />
+                      {c.name} (fecha dia {c.closing_day})
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedCard && (
+              <p className="text-xs text-indigo-600 mt-1">
+                Cada compra terá sua competência calculada com base no dia de fechamento (dia {selectedCard.closing_day})
+              </p>
+            )}
+            {creditCards.length === 0 && (
+              <p className="text-xs text-amber-600 mt-1">
+                Cadastre seus cartões em <strong>Cartões</strong> para ativar o cálculo automático de competência
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Upload area */}
       {!result && (
@@ -155,7 +201,7 @@ export function ImportClient({ categories, userId }: Props) {
                 <div className="flex flex-col items-center gap-3">
                   <Upload className="w-10 h-10 text-gray-400" />
                   <p className="text-gray-700 font-medium">Arraste o PDF aqui ou clique para selecionar</p>
-                  <p className="text-xs text-gray-400">Faturas Nubank, Itaú, Bradesco, Inter, C6, XP e outras</p>
+                  <p className="text-xs text-gray-400">Faturas Nubank, PicPay, Itaú, Bradesco, Inter e outras</p>
                 </div>
               )}
             </div>
@@ -172,42 +218,43 @@ export function ImportClient({ categories, userId }: Props) {
 
       {/* Results */}
       {result && transactions.length > 0 && (
-        <>
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-green-600" />
-                  {transactions.length} lançamentos encontrados
-                </CardTitle>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => { setResult(null); setTransactions([]) }}>
-                    Novo PDF
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="bg-green-600 hover:bg-green-700"
-                    onClick={handleSave}
-                    disabled={saving || selectedCount === 0}
-                  >
-                    {saving ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <CheckCircle className="w-4 h-4 mr-1" />}
-                    Importar {selectedCount} selecionados
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-2 mb-3">
-                <Button variant="outline" size="sm" onClick={() => setTransactions(ts => ts.map(t => ({ ...t, incluir: t.valor > 0 })))}>
-                  Selecionar todos
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileText className="w-4 h-4 text-green-600" />
+                {transactions.length} lançamentos encontrados
+              </CardTitle>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => { setResult(null); setTransactions([]) }}>
+                  Novo PDF
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setTransactions(ts => ts.map(t => ({ ...t, incluir: false })))}>
-                  Desmarcar todos
+                <Button
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={handleSave}
+                  disabled={saving || selectedCount === 0}
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <CheckCircle className="w-4 h-4 mr-1" />}
+                  Importar {selectedCount} selecionados
                 </Button>
               </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2 mb-3">
+              <Button variant="outline" size="sm" onClick={() => setTransactions(ts => ts.map(t => ({ ...t, incluir: t.valor > 0 })))}>
+                Selecionar todos
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setTransactions(ts => ts.map(t => ({ ...t, incluir: false })))}>
+                Desmarcar todos
+              </Button>
+            </div>
 
-              <div className="space-y-2 max-h-[60vh] overflow-y-auto">
-                {transactions.map((t, i) => (
+            <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+              {transactions.map((t, i) => {
+                const bp = selectedCard ? getBillingPeriod(t.data, selectedCard.closing_day) : null
+                return (
                   <div
                     key={i}
                     className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
@@ -223,8 +270,11 @@ export function ImportClient({ categories, userId }: Props) {
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{t.descricao}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <span className="text-xs text-gray-400">{t.data}</span>
+                        {bp && bp !== t.data.substring(0, 7) && (
+                          <span className="text-xs text-indigo-500">fatura {bp}</span>
+                        )}
                         <select
                           value={t.category_id}
                           onChange={e => setTransactions(ts => ts.map((x, j) => j === i ? { ...x, category_id: e.target.value } : x))}
@@ -246,18 +296,18 @@ export function ImportClient({ categories, userId }: Props) {
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
-                ))}
-              </div>
+                )
+              })}
+            </div>
 
-              {result.total_fatura && (
-                <div className="mt-4 pt-3 border-t flex justify-between text-sm">
-                  <span className="text-gray-500">Total da fatura</span>
-                  <span className="font-bold text-red-500">{formatCurrency(result.total_fatura)}</span>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </>
+            {result.total_fatura && (
+              <div className="mt-4 pt-3 border-t flex justify-between text-sm">
+                <span className="text-gray-500">Total da fatura</span>
+                <span className="font-bold text-red-500">{formatCurrency(result.total_fatura)}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   )

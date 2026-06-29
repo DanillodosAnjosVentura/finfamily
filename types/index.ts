@@ -14,6 +14,15 @@ export interface Category {
   created_at: string
 }
 
+export interface CreditCard {
+  id: string
+  user_id: string
+  name: string
+  closing_day: number
+  color: string
+  created_at: string
+}
+
 export interface Transaction {
   id: string
   user_id: string
@@ -24,8 +33,11 @@ export interface Transaction {
   date: string
   recurring: boolean
   recurring_period: RecurringPeriod | null
+  billing_period: string | null   // YYYY-MM — mês de competência da fatura
+  credit_card_id: string | null
   created_at: string
   category?: Category
+  credit_card?: CreditCard
 }
 
 export interface Goal {
@@ -39,4 +51,22 @@ export interface Goal {
   category: GoalCategory
   status: GoalStatus
   created_at: string
+}
+
+// Retorna o mês de competência de uma compra dado o dia de fechamento do cartão
+export function getBillingPeriod(purchaseDate: string, closingDay: number): string {
+  const d = new Date(purchaseDate + 'T12:00:00')
+  const day = d.getDate()
+  const month = d.getMonth()
+  const year = d.getFullYear()
+  if (day > closingDay) {
+    const next = new Date(year, month + 1, 1)
+    return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
+  }
+  return `${year}-${String(month + 1).padStart(2, '0')}`
+}
+
+// Período efetivo para filtros: usa billing_period se existir, senão mês da data
+export function effectivePeriod(t: Transaction): string {
+  return t.billing_period ?? t.date.substring(0, 7)
 }

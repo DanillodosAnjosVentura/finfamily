@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Transaction } from '@/types'
+import { Transaction, effectivePeriod } from '@/types'
 import { formatCurrency } from '@/lib/format'
 import { format, parseISO } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -25,7 +25,10 @@ export function ReportsClient({ transactions }: Props) {
   const [endDate, setEndDate] = useState(`${currentYear}-12-31`)
 
   const filtered = useMemo(() =>
-    transactions.filter(t => t.date >= startDate && t.date <= endDate),
+    transactions.filter(t => {
+      const period = effectivePeriod(t)
+      return period >= startDate.substring(0, 7) && period <= endDate.substring(0, 7)
+    }),
     [transactions, startDate, endDate]
   )
 
@@ -35,9 +38,9 @@ export function ReportsClient({ transactions }: Props) {
   // Evolução do saldo mês a mês
   const monthlyBalance: Record<string, { month: string; receitas: number; despesas: number; saldo: number }> = {}
   filtered.forEach(t => {
-    const key = t.date.substring(0, 7)
+    const key = effectivePeriod(t)
     if (!monthlyBalance[key]) {
-      const label = format(parseISO(t.date.substring(0, 7) + '-01'), 'MMM/yy', { locale: ptBR })
+      const label = format(parseISO(key + '-01'), 'MMM/yy', { locale: ptBR })
       monthlyBalance[key] = { month: label, receitas: 0, despesas: 0, saldo: 0 }
     }
     if (t.type === 'income') monthlyBalance[key].receitas += Number(t.amount)

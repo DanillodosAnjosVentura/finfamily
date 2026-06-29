@@ -1,6 +1,6 @@
 'use client'
 
-import { Transaction } from '@/types'
+import { Transaction, effectivePeriod } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
@@ -49,7 +49,7 @@ export function DashboardClient({ transactions, historicalTransactions }: Props)
   // Evolução mensal para BarChart
   const monthlyData: Record<string, { month: string; receitas: number; despesas: number }> = {}
   historicalTransactions.forEach(t => {
-    const monthKey = t.date.substring(0, 7)
+    const monthKey = (t as Transaction).billing_period ?? t.date.substring(0, 7)
     if (!monthlyData[monthKey]) {
         const label = format(parseISO(monthKey + '-01'), 'MMM/yy', { locale: ptBR })
       monthlyData[monthKey] = { month: label, receitas: 0, despesas: 0 }

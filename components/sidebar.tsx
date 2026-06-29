@@ -16,12 +16,14 @@ import {
   Menu,
   X,
   Upload,
+  CreditCard,
 } from 'lucide-react'
 
 export const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/transactions', label: 'Transações', icon: ArrowLeftRight },
   { href: '/import', label: 'Importar PDF', icon: Upload },
+  { href: '/cards', label: 'Cartões', icon: CreditCard },
   { href: '/categories', label: 'Categorias', icon: Tag },
   { href: '/goals', label: 'Metas', icon: Target },
   { href: '/reports', label: 'Relatórios', icon: BarChart3 },
