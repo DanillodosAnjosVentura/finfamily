@@ -19,6 +19,7 @@ export interface CreditCard {
   user_id: string
   name: string
   closing_day: number
+  closing_inclusive: boolean  // true = dia exato já vai para mês seguinte (ex: Nubank); false = apenas dia posterior (ex: PicPay)
   color: string
   created_at: string
 }
@@ -53,13 +54,16 @@ export interface Goal {
   created_at: string
 }
 
-// Retorna o mês de competência de uma compra dado o dia de fechamento do cartão
-export function getBillingPeriod(purchaseDate: string, closingDay: number): string {
+// Retorna o mês de competência de uma compra dado o dia de fechamento do cartão.
+// closingInclusive=true (Nubank): compras no próprio dia de fechamento vão para mês seguinte.
+// closingInclusive=false (PicPay): apenas compras APÓS o dia de fechamento vão para mês seguinte.
+export function getBillingPeriod(purchaseDate: string, closingDay: number, closingInclusive = false): string {
   const d = new Date(purchaseDate + 'T12:00:00')
   const day = d.getDate()
   const month = d.getMonth()
   const year = d.getFullYear()
-  if (day > closingDay) {
+  const goesNext = closingInclusive ? day >= closingDay : day > closingDay
+  if (goesNext) {
     const next = new Date(year, month + 1, 1)
     return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
   }

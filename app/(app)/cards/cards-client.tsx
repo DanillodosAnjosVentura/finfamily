@@ -14,7 +14,7 @@ import { Plus, Pencil, Trash2, CreditCard as CardIcon } from 'lucide-react'
 
 interface Props { initialCards: CreditCard[]; userId: string }
 
-const EMPTY = { name: '', closing_day: '', color: '#6366f1' }
+const EMPTY = { name: '', closing_day: '', color: '#6366f1', closing_inclusive: false }
 const COLORS = ['#6366f1','#22c55e','#ef4444','#f59e0b','#3b82f6','#ec4899','#8b5cf6','#14b8a6']
 
 export function CardsClient({ initialCards, userId }: Props) {
@@ -26,7 +26,7 @@ export function CardsClient({ initialCards, userId }: Props) {
 
   function openNew() { setForm(EMPTY); setEditingId(null); setOpen(true) }
   function openEdit(c: CreditCard) {
-    setForm({ name: c.name, closing_day: String(c.closing_day), color: c.color })
+    setForm({ name: c.name, closing_day: String(c.closing_day), color: c.color, closing_inclusive: c.closing_inclusive })
     setEditingId(c.id); setOpen(true)
   }
 
@@ -38,7 +38,7 @@ export function CardsClient({ initialCards, userId }: Props) {
     }
     setLoading(true)
     const supabase = createClient()
-    const payload = { user_id: userId, name: form.name, closing_day: day, color: form.color }
+    const payload = { user_id: userId, name: form.name, closing_day: day, color: form.color, closing_inclusive: form.closing_inclusive }
     try {
       if (editingId) {
         const { data, error } = await supabase.from('credit_cards').update(payload).eq('id', editingId).select().single()
@@ -87,6 +87,27 @@ export function CardsClient({ initialCards, userId }: Props) {
               <Label>Dia de fechamento * (1–28)</Label>
               <Input type="number" min={1} max={28} placeholder="Ex: 6" value={form.closing_day} onChange={e => setForm(f => ({ ...f, closing_day: e.target.value }))} />
               <p className="text-xs text-gray-400">Compras após este dia vão para a fatura do mês seguinte</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Comportamento no dia de fechamento</Label>
+              <div className="space-y-1.5">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="radio" name="closing_mode" checked={!form.closing_inclusive}
+                    onChange={() => setForm(f => ({ ...f, closing_inclusive: false }))} className="mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium">Apenas o dia seguinte ao fechamento (PicPay)</p>
+                    <p className="text-xs text-gray-400">Compra no dia {form.closing_day || 'X'} fica na fatura atual; compra no dia {Number(form.closing_day || 0) + 1} vai para próxima</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="radio" name="closing_mode" checked={form.closing_inclusive}
+                    onChange={() => setForm(f => ({ ...f, closing_inclusive: true }))} className="mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium">A partir do próprio dia de fechamento (Nubank)</p>
+                    <p className="text-xs text-gray-400">Compra no dia {form.closing_day || 'X'} já vai para próxima fatura; compra no dia {Number(form.closing_day || 0) - 1} fica na atual</p>
+                  </div>
+                </label>
+              </div>
             </div>
             <div className="space-y-1">
               <Label>Cor</Label>
@@ -141,7 +162,11 @@ export function CardsClient({ initialCards, userId }: Props) {
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-gray-600">Fecha todo dia <strong>{c.closing_day}</strong></p>
-                <p className="text-xs text-gray-400 mt-1">Compras após dia {c.closing_day} → fatura do mês seguinte</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {c.closing_inclusive
+                    ? `Compras a partir do dia ${c.closing_day} → mês seguinte`
+                    : `Compras após o dia ${c.closing_day} → mês seguinte`}
+                </p>
               </CardContent>
             </Card>
           ))}

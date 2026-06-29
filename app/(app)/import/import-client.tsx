@@ -117,7 +117,7 @@ export function ImportClient({ categories, creditCards, userId }: Props) {
         date: t.data,
         recurring: false,
         credit_card_id: selectedCard?.id || null,
-        billing_period: selectedCard ? getBillingPeriod(t.data, selectedCard.closing_day) : null,
+        billing_period: selectedCard ? getBillingPeriod(t.data, selectedCard.closing_day, selectedCard.closing_inclusive) : null,
       }))
       const { error } = await supabase.from('transactions').insert(rows)
       if (error) throw error
@@ -253,7 +253,7 @@ export function ImportClient({ categories, creditCards, userId }: Props) {
 
             <div className="space-y-2 max-h-[60vh] overflow-y-auto">
               {transactions.map((t, i) => {
-                const bp = selectedCard ? getBillingPeriod(t.data, selectedCard.closing_day) : null
+                const bp = selectedCard ? getBillingPeriod(t.data, selectedCard.closing_day, selectedCard.closing_inclusive) : null
                 return (
                   <div
                     key={i}

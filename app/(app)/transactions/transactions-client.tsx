@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Pencil, CreditCard as CardIcon } from 'lucide-react'
+import { Plus, Trash2, Pencil, CreditCard as CardIcon, CheckSquare, Square, X, Layers } from 'lucide-react'
 
 interface Props {
   initialTransactions: Transaction[]
@@ -44,15 +44,22 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
   const [filterType, setFilterType] = useState('all')
   const [filterMonth, setFilterMonth] = useState('')
   const [loading, setLoading] = useState(false)
+  // Seleção múltipla
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchCategory, setBatchCategory] = useState('')
+  const [batchCardId, setBatchCardId] = useState('__unchanged__')
+  const [batchSaving, setBatchSaving] = useState(false)
+
   const supabase = createClient()
   const router = useRouter()
 
   const filteredCategories = categories.filter(c => c.type === form.type)
 
-  // Calcular billing_period com base no cartão selecionado
   const selectedCard = creditCards.find(c => c.id === form.credit_card_id)
   const computedBillingPeriod = selectedCard && form.date
-    ? getBillingPeriod(form.date, selectedCard.closing_day)
+    ? getBillingPeriod(form.date, selectedCard.closing_day, selectedCard.closing_inclusive)
     : null
 
   const filteredTransactions = transactions.filter(t => {
@@ -78,6 +85,96 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
     setOpen(true)
   }
 
+  function toggleSelect(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    if (selected.size === filteredTransactions.length) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(filteredTransactions.map(t => t.id)))
+    }
+  }
+
+  function exitSelecting() { setSelecting(false); setSelected(new Set()) }
+
+  async function handleBatchSave() {
+    if (selected.size === 0) return
+    if (!batchCategory && batchCardId === '__unchanged__') {
+      toast.error('Selecione ao menos uma alteração')
+      return
+    }
+    setBatchSaving(true)
+
+    const ids = Array.from(selected)
+    const updates: Record<string, unknown> = {}
+    if (batchCategory) updates.category_id = batchCategory
+
+    if (batchCardId !== '__unchanged__') {
+      if (batchCardId === 'none') {
+        updates.credit_card_id = null
+        updates.billing_period = null
+      } else {
+        const card = creditCards.find(c => c.id === batchCardId)
+        updates.credit_card_id = batchCardId
+        // Recalcula billing_period para cada transação individualmente
+        const affected = transactions.filter(t => ids.includes(t.id))
+        if (card) {
+          for (const t of affected) {
+            const bp = getBillingPeriod(t.date, card.closing_day, card.closing_inclusive)
+            await supabase.from('transactions').update({ ...updates, billing_period: bp }).eq('id', t.id)
+          }
+          // Atualiza estado local
+          if (batchCategory) {
+            const cat = categories.find(c => c.id === batchCategory)
+            setTransactions(prev => prev.map(t =>
+              ids.includes(t.id)
+                ? { ...t, category_id: batchCategory, category: cat || t.category, credit_card_id: batchCardId, credit_card: card, billing_period: getBillingPeriod(t.date, card.closing_day, card.closing_inclusive) }
+                : t
+            ))
+          } else {
+            setTransactions(prev => prev.map(t =>
+              ids.includes(t.id)
+                ? { ...t, credit_card_id: batchCardId, credit_card: card, billing_period: getBillingPeriod(t.date, card.closing_day, card.closing_inclusive) }
+                : t
+            ))
+          }
+          toast.success(`${ids.length} transações atualizadas!`)
+          setBatchOpen(false)
+          exitSelecting()
+          setBatchSaving(false)
+          router.refresh()
+          return
+        }
+      }
+    }
+
+    // Atualização simples (só categoria ou remoção de cartão)
+    const { error } = await supabase.from('transactions').update(updates).in('id', ids)
+    if (error) { toast.error('Erro ao atualizar'); setBatchSaving(false); return }
+
+    const cat = batchCategory ? categories.find(c => c.id === batchCategory) : undefined
+    setTransactions(prev => prev.map(t => {
+      if (!ids.includes(t.id)) return t
+      return {
+        ...t,
+        ...(batchCategory ? { category_id: batchCategory, category: cat || t.category } : {}),
+        ...(batchCardId === 'none' ? { credit_card_id: null, credit_card: undefined, billing_period: null } : {}),
+      }
+    }))
+
+    toast.success(`${ids.length} transações atualizadas!`)
+    setBatchOpen(false)
+    exitSelecting()
+    setBatchSaving(false)
+    router.refresh()
+  }
+
   async function handleSave() {
     if (!form.amount || !form.category_id || !form.date) {
       toast.error('Preencha todos os campos obrigatórios')
@@ -86,7 +183,7 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
     setLoading(true)
 
     const card = creditCards.find(c => c.id === form.credit_card_id)
-    const billing_period = card ? getBillingPeriod(form.date, card.closing_day) : null
+    const billing_period = card ? getBillingPeriod(form.date, card.closing_day, card.closing_inclusive) : null
 
     const payload = {
       user_id: userId,
@@ -139,6 +236,8 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
   const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
   const totalExpense = filteredTransactions.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
 
+  const allSelected = selected.size > 0 && selected.size === filteredTransactions.length
+
   return (
     <div className="p-4 md:p-6 space-y-5 pb-24 md:pb-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -146,11 +245,34 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
           <h1 className="text-2xl font-bold text-gray-900">Transações</h1>
           <p className="text-sm text-gray-500">Receitas e despesas</p>
         </div>
-        <Button onClick={openNew} className="bg-green-600 hover:bg-green-700 gap-2">
-          <Plus className="w-4 h-4" /> Nova
-        </Button>
+        <div className="flex gap-2">
+          {!selecting ? (
+            <>
+              <Button variant="outline" onClick={() => setSelecting(true)} className="gap-2">
+                <Layers className="w-4 h-4" /> Editar em lote
+              </Button>
+              <Button onClick={openNew} className="bg-green-600 hover:bg-green-700 gap-2">
+                <Plus className="w-4 h-4" /> Nova
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={exitSelecting} className="gap-2">
+                <X className="w-4 h-4" /> Cancelar
+              </Button>
+              <Button
+                disabled={selected.size === 0}
+                onClick={() => { setBatchCategory(''); setBatchCardId('__unchanged__'); setBatchOpen(true) }}
+                className="bg-indigo-600 hover:bg-indigo-700 gap-2"
+              >
+                <Layers className="w-4 h-4" /> Editar {selected.size > 0 ? `${selected.size} selecionados` : 'selecionados'}
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
+      {/* Dialog edição individual */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -218,7 +340,7 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
                 </Select>
                 {computedBillingPeriod && (
                   <p className="text-xs text-indigo-600 mt-1">
-                    📅 Competência: <strong>{computedBillingPeriod}</strong> — esta compra entra na fatura de {new Date(computedBillingPeriod + '-15').toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}
+                    📅 Competência: <strong>{computedBillingPeriod}</strong> — fatura de {new Date(computedBillingPeriod + '-15').toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}
                   </p>
                 )}
               </div>
@@ -250,6 +372,57 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
         </DialogContent>
       </Dialog>
 
+      {/* Dialog edição em lote */}
+      <Dialog open={batchOpen} onOpenChange={setBatchOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Editar {selected.size} transações</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <p className="text-sm text-gray-500">Deixe em branco os campos que não deseja alterar.</p>
+
+            <div className="space-y-1">
+              <Label>Categoria</Label>
+              <Select value={batchCategory} onValueChange={v => setBatchCategory(v === '__keep__' ? '' : (v ?? ''))}>
+                <SelectTrigger><SelectValue placeholder="— Manter categoria atual —" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__keep__">— Manter categoria atual —</SelectItem>
+                  {categories.map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.icon} {c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label>Cartão de crédito</Label>
+              <Select value={batchCardId} onValueChange={v => setBatchCardId(v ?? '__unchanged__')}>
+                <SelectTrigger><SelectValue placeholder="— Manter cartão atual —" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__unchanged__">— Manter cartão atual —</SelectItem>
+                  <SelectItem value="none">— Remover cartão (despesa direta) —</SelectItem>
+                  {creditCards.map(c => (
+                    <SelectItem key={c.id} value={c.id}>
+                      <span className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: c.color }} />
+                        {c.name} (fecha dia {c.closing_day})
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {batchCardId !== '__unchanged__' && batchCardId !== 'none' && (
+                <p className="text-xs text-indigo-600 mt-1">A competência de cada lançamento será recalculada automaticamente.</p>
+              )}
+            </div>
+
+            <Button onClick={handleBatchSave} disabled={batchSaving} className="w-full bg-indigo-600 hover:bg-indigo-700">
+              {batchSaving ? 'Salvando...' : `Aplicar a ${selected.size} transações`}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Resumo */}
       <div className="grid grid-cols-3 gap-3">
         <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Receitas</p><p className="font-bold text-green-600 text-sm">{formatCurrency(totalIncome)}</p></CardContent></Card>
@@ -276,15 +449,36 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
 
       {/* Lista */}
       <Card>
-        <CardHeader><CardTitle className="text-base">Histórico ({filteredTransactions.length})</CardTitle></CardHeader>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Histórico ({filteredTransactions.length})</CardTitle>
+            {selecting && (
+              <button onClick={toggleSelectAll} className="flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-800">
+                {allSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                {allSelected ? 'Desmarcar todos' : 'Selecionar todos'}
+              </button>
+            )}
+          </div>
+        </CardHeader>
         <CardContent className="p-0">
           {filteredTransactions.length === 0 ? (
             <p className="text-center text-gray-400 py-12 text-sm">Nenhuma transação encontrada</p>
           ) : (
             <div className="divide-y divide-gray-100">
               {filteredTransactions.map(t => (
-                <div key={t.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
-                  <div className="flex items-center gap-3 min-w-0">
+                <div
+                  key={t.id}
+                  className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors ${selecting && selected.has(t.id) ? 'bg-indigo-50' : ''}`}
+                  onClick={selecting ? () => toggleSelect(t.id) : undefined}
+                >
+                  {selecting && (
+                    <div className="mr-3 flex-shrink-0">
+                      {selected.has(t.id)
+                        ? <CheckSquare className="w-5 h-5 text-indigo-600" />
+                        : <Square className="w-5 h-5 text-gray-300" />}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
                     <span className="text-xl flex-shrink-0">{t.category?.icon ?? '💳'}</span>
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">
@@ -306,24 +500,28 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
                     <span className={`font-semibold text-sm ${t.type === 'income' ? 'text-green-600' : 'text-red-500'}`}>
                       {t.type === 'income' ? '+' : '-'}{formatCurrency(Number(t.amount))}
                     </span>
-                    <button onClick={() => openEdit(t)} className="text-gray-400 hover:text-blue-500 p-1">
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <AlertDialog>
-                      <AlertDialogTrigger className="text-gray-400 hover:text-red-500 p-1 rounded inline-flex">
-                        <Trash2 className="w-4 h-4" />
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Excluir transação?</AlertDialogTitle>
-                          <AlertDialogDescription>Esta ação não pode ser desfeita.</AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                          <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-red-500 hover:bg-red-600">Excluir</AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                    {!selecting && (
+                      <>
+                        <button onClick={() => openEdit(t)} className="text-gray-400 hover:text-blue-500 p-1">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <AlertDialog>
+                          <AlertDialogTrigger className="text-gray-400 hover:text-red-500 p-1 rounded inline-flex">
+                            <Trash2 className="w-4 h-4" />
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Excluir transação?</AlertDialogTitle>
+                              <AlertDialogDescription>Esta ação não pode ser desfeita.</AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-red-500 hover:bg-red-600">Excluir</AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
@@ -331,6 +529,19 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
           )}
         </CardContent>
       </Card>
+
+      {/* Barra flutuante de seleção */}
+      {selecting && selected.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-indigo-600 text-white rounded-xl shadow-xl px-5 py-3 flex items-center gap-4">
+          <span className="text-sm font-medium">{selected.size} selecionados</span>
+          <Button size="sm" variant="secondary" onClick={() => { setBatchCategory(''); setBatchCardId('__unchanged__'); setBatchOpen(true) }}>
+            Editar em lote
+          </Button>
+          <button onClick={exitSelecting} className="text-white/70 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
