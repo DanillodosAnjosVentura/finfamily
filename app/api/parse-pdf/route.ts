@@ -127,20 +127,28 @@ function guessCategory(desc: string): string {
 }
 
 async function extractText(buffer: Buffer): Promise<string> {
-  // Polyfill DOMMatrix para ambiente Node.js (necessário para pdf-parse)
-  if (typeof (globalThis as Record<string, unknown>).DOMMatrix === 'undefined') {
+  return new Promise((resolve) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const PDFParser = require('pdf2json')
+    const parser = new PDFParser(null, true)
+
+    parser.on('pdfParser_dataError', () => resolve(''))
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).DOMMatrix = class DOMMatrix {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      constructor(..._args: any[]) {}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      static fromMatrix() { return new (globalThis as any).DOMMatrix() }
-    }
-  }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfParse = require('pdf-parse')
-  const data = await pdfParse(buffer)
-  return data.text || ''
+    parser.on('pdfParser_dataReady', (data: any) => {
+      try {
+        const pages: string[] = data?.Pages?.map((page: any) =>
+          page?.Texts?.map((t: any) =>
+            decodeURIComponent(t?.R?.map((r: any) => r?.T || '').join(''))
+          ).join('\n')
+        ) || []
+        resolve(pages.join('\n'))
+      } catch {
+        resolve('')
+      }
+    })
+
+    parser.parseBuffer(buffer)
+  })
 }
 
 export async function POST(req: NextRequest) {
