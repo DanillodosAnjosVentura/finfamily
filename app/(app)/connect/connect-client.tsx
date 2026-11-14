@@ -230,10 +230,8 @@ export function ConnectClient({ initialItems }: Props) {
                       </Button>
                     )}
                     <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button size="sm" variant="ghost" className="text-red-400 hover:text-red-600">
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                      <AlertDialogTrigger className="inline-flex items-center justify-center rounded-md p-2 text-red-400 hover:text-red-600 hover:bg-transparent">
+                        <Trash2 className="w-4 h-4" />
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
