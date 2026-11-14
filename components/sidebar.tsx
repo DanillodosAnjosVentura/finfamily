@@ -17,11 +17,13 @@ import {
   X,
   Upload,
   CreditCard,
+  Link2,
 } from 'lucide-react'
 
 export const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/transactions', label: 'Transações', icon: ArrowLeftRight },
+  { href: '/connect', label: 'Conectar Banco', icon: Link2 },
   { href: '/import', label: 'Importar PDF', icon: Upload },
   { href: '/cards', label: 'Cartões', icon: CreditCard },
   { href: '/categories', label: 'Categorias', icon: Tag },
