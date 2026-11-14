@@ -36,6 +36,10 @@ export interface Transaction {
   recurring_period: RecurringPeriod | null
   billing_period: string | null   // YYYY-MM — mês de competência da fatura
   credit_card_id: string | null
+  installment_group_id: string | null
+  installment_current: number | null
+  installment_total: number | null
+  is_credit_card_installment: boolean
   created_at: string
   category?: Category
   credit_card?: CreditCard

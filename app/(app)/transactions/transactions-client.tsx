@@ -34,6 +34,10 @@ const EMPTY_FORM = {
   recurring: false,
   recurring_period: '' as '' | 'monthly' | 'yearly',
   credit_card_id: '',
+  // parcelas
+  launch_mode: 'single' as 'single' | 'installments' | 'recurring',
+  installment_total: '',
+  is_credit_card_installment: false,
 }
 
 export function TransactionsClient({ initialTransactions, categories, creditCards, userId }: Props) {
@@ -71,6 +75,7 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
   function openNew() { setForm(EMPTY_FORM); setEditingId(null); setOpen(true) }
 
   function openEdit(t: Transaction) {
+    const launch_mode = t.installment_total ? 'installments' : t.recurring ? 'recurring' : 'single'
     setForm({
       amount: String(t.amount),
       type: t.type,
@@ -80,6 +85,9 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
       recurring: t.recurring,
       recurring_period: t.recurring_period || '',
       credit_card_id: t.credit_card_id || '',
+      launch_mode,
+      installment_total: t.installment_total ? String(t.installment_total) : '',
+      is_credit_card_installment: t.is_credit_card_installment || false,
     })
     setEditingId(t.id)
     setOpen(true)
@@ -175,6 +183,17 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
     router.refresh()
   }
 
+  function addMonths(dateStr: string, months: number): string {
+    const d = new Date(dateStr + 'T12:00:00')
+    const day = d.getDate()
+    d.setDate(1)
+    d.setMonth(d.getMonth() + months)
+    // clamp para o último dia do mês destino
+    const maxDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+    d.setDate(Math.min(day, maxDay))
+    return d.toISOString().split('T')[0]
+  }
+
   async function handleSave() {
     if (!form.amount || !form.category_id || !form.date) {
       toast.error('Preencha todos os campos obrigatórios')
@@ -182,24 +201,35 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
     }
     setLoading(true)
 
-    const card = creditCards.find(c => c.id === form.credit_card_id)
-    const billing_period = card ? getBillingPeriod(form.date, card.closing_day, card.closing_inclusive) : null
+    const isInstallments = form.launch_mode === 'installments'
+    const isRecurring = form.launch_mode === 'recurring'
+    const installTotal = isInstallments && form.installment_total ? parseInt(form.installment_total) : null
 
-    const payload = {
+    const card = creditCards.find(c => c.id === form.credit_card_id)
+
+    const basePayload = {
       user_id: userId,
       amount: parseFloat(form.amount),
       type: form.type,
       category_id: form.category_id,
-      description: form.description || null,
-      date: form.date,
-      recurring: form.recurring,
-      recurring_period: form.recurring_period || null,
+      recurring: isRecurring,
+      recurring_period: isRecurring ? (form.recurring_period || null) : null,
       credit_card_id: form.credit_card_id || null,
-      billing_period,
+      is_credit_card_installment: form.is_credit_card_installment,
+      installment_total: installTotal,
     }
 
     try {
       if (editingId) {
+        const billing_period = card ? getBillingPeriod(form.date, card.closing_day, card.closing_inclusive) : null
+        const payload = {
+          ...basePayload,
+          description: form.description || null,
+          date: form.date,
+          billing_period,
+          installment_current: null as number | null,
+          installment_group_id: null as string | null,
+        }
         const { data, error } = await supabase
           .from('transactions')
           .update(payload)
@@ -209,16 +239,78 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
         if (error) throw error
         setTransactions(prev => prev.map(t => t.id === editingId ? data : t))
         toast.success('Transação atualizada!')
-      } else {
+        setOpen(false)
+        router.refresh()
+        return
+      }
+
+      // — Novo lançamento —
+
+      // Parcelado no cartão: salva só 1 (as transações virão pela importação da fatura)
+      if (isInstallments && form.is_credit_card_installment) {
+        const billing_period = card ? getBillingPeriod(form.date, card.closing_day, card.closing_inclusive) : null
         const { data, error } = await supabase
           .from('transactions')
-          .insert(payload)
+          .insert({
+            ...basePayload,
+            description: form.description ? `${form.description} 1/${installTotal}` : `Parcela 1/${installTotal}`,
+            date: form.date,
+            billing_period,
+            installment_current: 1,
+            installment_group_id: crypto.randomUUID(),
+          })
           .select('*, category:categories(*), credit_card:credit_cards(*)')
           .single()
         if (error) throw error
         setTransactions(prev => [data, ...prev])
-        toast.success('Transação lançada!')
+        toast.success(`Parcela 1/${installTotal} registrada. Demais parcelas virão pela fatura do cartão.`)
+        setOpen(false)
+        router.refresh()
+        return
       }
+
+      // Parcelado sem cartão (ou parcelado no cartão mas criando todas): cria N transações
+      if (isInstallments && installTotal && installTotal > 1) {
+        const groupId = crypto.randomUUID()
+        const rows = []
+        for (let i = 1; i <= installTotal; i++) {
+          const dateStr = addMonths(form.date, i - 1)
+          const billing_period = card ? getBillingPeriod(dateStr, card.closing_day, card.closing_inclusive) : null
+          const baseDesc = form.description || ''
+          rows.push({
+            ...basePayload,
+            description: baseDesc ? `${baseDesc} ${i}/${installTotal}` : `Parcela ${i}/${installTotal}`,
+            date: dateStr,
+            billing_period,
+            installment_current: i,
+            installment_group_id: groupId,
+          })
+        }
+        const { error } = await supabase.from('transactions').insert(rows)
+        if (error) throw error
+        toast.success(`${installTotal} parcelas lançadas!`)
+        setOpen(false)
+        router.refresh()
+        return
+      }
+
+      // Lançamento único ou recorrente simples
+      const billing_period = card ? getBillingPeriod(form.date, card.closing_day, card.closing_inclusive) : null
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert({
+          ...basePayload,
+          description: form.description || null,
+          date: form.date,
+          billing_period,
+          installment_current: null,
+          installment_group_id: null,
+        })
+        .select('*, category:categories(*), credit_card:credit_cards(*)')
+        .single()
+      if (error) throw error
+      setTransactions(prev => [data, ...prev])
+      toast.success('Transação lançada!')
       setOpen(false)
       router.refresh()
     } catch { toast.error('Erro ao salvar transação') }
@@ -346,13 +438,23 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
               </div>
             )}
 
-            <div className="flex items-center gap-2">
-              <input type="checkbox" id="recurring" checked={form.recurring}
-                onChange={e => setForm(f => ({ ...f, recurring: e.target.checked }))} className="w-4 h-4" />
-              <Label htmlFor="recurring">Lançamento recorrente</Label>
+            <div className="space-y-1">
+              <Label>Tipo de lançamento</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['single', 'installments', 'recurring'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, launch_mode: mode, recurring: mode === 'recurring', installment_total: '', is_credit_card_installment: false }))}
+                    className={`py-2 px-2 rounded-lg border text-xs font-medium transition-colors ${form.launch_mode === mode ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 text-gray-600 hover:border-indigo-300'}`}
+                  >
+                    {mode === 'single' ? '🔹 Único' : mode === 'installments' ? '📆 Parcelado' : '🔁 Recorrente'}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {form.recurring && (
+            {form.launch_mode === 'recurring' && (
               <div className="space-y-1">
                 <Label>Periodicidade</Label>
                 <Select value={form.recurring_period} onValueChange={v => setForm(f => ({ ...f, recurring_period: (v ?? '') as '' | 'monthly' | 'yearly' }))}>
@@ -362,6 +464,52 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
                     <SelectItem value="yearly">Anual</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            )}
+
+            {form.launch_mode === 'installments' && (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label>Número de parcelas *</Label>
+                  <Input
+                    type="number" min="2" max="360" placeholder="Ex: 40"
+                    value={form.installment_total}
+                    onChange={e => setForm(f => ({ ...f, installment_total: e.target.value }))}
+                  />
+                  {form.installment_total && form.amount && (
+                    <p className="text-xs text-gray-500">
+                      {parseInt(form.installment_total)}x de {formatCurrency(parseFloat(form.amount))} = {formatCurrency(parseFloat(form.amount) * parseInt(form.installment_total))}
+                    </p>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+                  <Label className="text-amber-800 text-xs font-semibold">Onde são lançadas as parcelas?</Label>
+                  <div className="flex flex-col gap-2">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio" name="installment_mode" className="mt-0.5"
+                        checked={!form.is_credit_card_installment}
+                        onChange={() => setForm(f => ({ ...f, is_credit_card_installment: false }))}
+                      />
+                      <div>
+                        <p className="text-xs font-medium text-gray-800">Débito direto / boleto</p>
+                        <p className="text-xs text-gray-500">Cria {form.installment_total || 'N'} lançamentos mensais automaticamente (ex: consórcio, financiamento)</p>
+                      </div>
+                    </label>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio" name="installment_mode" className="mt-0.5"
+                        checked={form.is_credit_card_installment}
+                        onChange={() => setForm(f => ({ ...f, is_credit_card_installment: true }))}
+                      />
+                      <div>
+                        <p className="text-xs font-medium text-gray-800">Cartão de crédito</p>
+                        <p className="text-xs text-gray-500">Registra apenas a 1ª parcela — as demais virão pela importação da fatura, sem duplicar</p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -483,7 +631,12 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">
                         {t.description || t.category?.name || 'Sem descrição'}
-                        {t.recurring && <Badge variant="outline" className="ml-2 text-xs py-0">{t.recurring_period === 'monthly' ? 'mensal' : 'anual'}</Badge>}
+                        {t.installment_total && t.installment_current && (
+                          <Badge variant="outline" className="ml-2 text-xs py-0 text-indigo-600 border-indigo-300">
+                            {t.installment_current}/{t.installment_total}
+                          </Badge>
+                        )}
+                        {t.recurring && !t.installment_total && <Badge variant="outline" className="ml-2 text-xs py-0">{t.recurring_period === 'monthly' ? 'mensal' : 'anual'}</Badge>}
                       </p>
                       <p className="text-xs text-gray-400 flex items-center gap-1 flex-wrap">
                         <span>{format(parseISO(t.date), 'dd/MM/yy', { locale: ptBR })}</span>
