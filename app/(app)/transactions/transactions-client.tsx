@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Pencil, CreditCard as CardIcon, CheckSquare, Square, X, Layers } from 'lucide-react'
+import { Plus, Trash2, Pencil, CreditCard as CardIcon, CheckSquare, Square, X, Layers, CheckCircle2, Circle } from 'lucide-react'
 
 interface Props {
   initialTransactions: Transaction[]
@@ -272,6 +272,7 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
       // Parcelado sem cartão (ou parcelado no cartão mas criando todas): cria N transações
       if (isInstallments && installTotal && installTotal > 1) {
         const groupId = crypto.randomUUID()
+        const today = new Date().toISOString().split('T')[0]
         const rows = []
         for (let i = 1; i <= installTotal; i++) {
           const dateStr = addMonths(form.date, i - 1)
@@ -284,11 +285,13 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
             billing_period,
             installment_current: i,
             installment_group_id: groupId,
+            is_paid: dateStr <= today,
           })
         }
         const { error } = await supabase.from('transactions').insert(rows)
         if (error) throw error
-        toast.success(`${installTotal} parcelas lançadas!`)
+        const paid = rows.filter(r => r.is_paid).length
+        toast.success(`${installTotal} parcelas lançadas! ${paid > 0 ? `(${paid} já marcadas como pagas)` : ''}`)
         setOpen(false)
         router.refresh()
         return
@@ -315,6 +318,14 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
       router.refresh()
     } catch { toast.error('Erro ao salvar transação') }
     finally { setLoading(false) }
+  }
+
+  async function togglePaid(t: Transaction) {
+    const newVal = !t.is_paid
+    const { error } = await supabase.from('transactions').update({ is_paid: newVal }).eq('id', t.id)
+    if (error) { toast.error('Erro ao atualizar'); return }
+    setTransactions(prev => prev.map(x => x.id === t.id ? { ...x, is_paid: newVal } : x))
+    toast.success(newVal ? 'Marcada como paga ✓' : 'Marcada como pendente')
   }
 
   async function handleDelete(id: string) {
@@ -409,8 +420,24 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
             </div>
 
             <div className="space-y-1">
-              <Label>Data da compra *</Label>
+              <Label>{form.launch_mode === 'installments' ? 'Data do 1º vencimento *' : 'Data da compra *'}</Label>
               <Input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+              {form.launch_mode === 'installments' && form.date && form.installment_total && (() => {
+                const today = new Date().toISOString().split('T')[0]
+                const total = parseInt(form.installment_total)
+                let paid = 0
+                for (let i = 0; i < total; i++) {
+                  const d = new Date(form.date + 'T12:00:00')
+                  d.setMonth(d.getMonth() + i)
+                  if (d.toISOString().split('T')[0] <= today) paid++
+                }
+                const pending = total - paid
+                return paid > 0 ? (
+                  <p className="text-xs mt-1 text-gray-500">
+                    <span className="text-green-600 font-medium">{paid} já pagas</span> · <span className="text-indigo-600 font-medium">{pending} a vencer</span>
+                  </p>
+                ) : null
+              })()}
             </div>
 
             {form.type === 'expense' && (
@@ -629,11 +656,11 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <span className="text-xl flex-shrink-0">{t.category?.icon ?? '💳'}</span>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">
+                      <p className={`text-sm font-medium truncate ${t.is_paid && t.installment_total ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
                         {t.description || t.category?.name || 'Sem descrição'}
                         {t.installment_total && t.installment_current && (
-                          <Badge variant="outline" className="ml-2 text-xs py-0 text-indigo-600 border-indigo-300">
-                            {t.installment_current}/{t.installment_total}
+                          <Badge variant="outline" className={`ml-2 text-xs py-0 ${t.is_paid ? 'text-green-600 border-green-300' : 'text-indigo-600 border-indigo-300'}`}>
+                            {t.is_paid ? '✓ ' : ''}{t.installment_current}/{t.installment_total}
                           </Badge>
                         )}
                         {t.recurring && !t.installment_total && <Badge variant="outline" className="ml-2 text-xs py-0">{t.recurring_period === 'monthly' ? 'mensal' : 'anual'}</Badge>}
@@ -655,6 +682,15 @@ export function TransactionsClient({ initialTransactions, categories, creditCard
                     </span>
                     {!selecting && (
                       <>
+                        {t.installment_total && (
+                          <button
+                            onClick={() => togglePaid(t)}
+                            title={t.is_paid ? 'Marcar como pendente' : 'Marcar como paga'}
+                            className={`p-1 rounded transition-colors ${t.is_paid ? 'text-green-500 hover:text-gray-400' : 'text-gray-300 hover:text-green-500'}`}
+                          >
+                            {t.is_paid ? <CheckCircle2 className="w-4 h-4" /> : <Circle className="w-4 h-4" />}
+                          </button>
+                        )}
                         <button onClick={() => openEdit(t)} className="text-gray-400 hover:text-blue-500 p-1">
                           <Pencil className="w-4 h-4" />
                         </button>

@@ -40,6 +40,7 @@ export interface Transaction {
   installment_current: number | null
   installment_total: number | null
   is_credit_card_installment: boolean
+  is_paid: boolean
   created_at: string
   category?: Category
   credit_card?: CreditCard
